@@ -38,6 +38,7 @@ type pmapGauge struct {
 
 // Prometheus contains the metrics gathered by the instance and its path
 type Prometheus struct {
+	upTime       *prometheus.CounterVec
 	reqCnt       *prometheus.CounterVec
 	reqDur       *prometheus.HistogramVec
 	reqSz, resSz prometheus.Summary
@@ -187,8 +188,17 @@ func New(options ...func(*Prometheus)) *Prometheus {
 	if p.Engine != nil {
 		p.Engine.GET(p.MetricsPath, prometheusHandler(p.Token))
 	}
+	go recordUptime(p)
 
 	return p
+}
+
+func recordUptime(p *Prometheus) {
+	for range time.Tick(time.Second) {
+		if p != nil {
+			p.upTime.WithLabelValues().Inc()
+		}
+	}
 }
 
 func (p *Prometheus) update() {
@@ -219,6 +229,16 @@ func (p *Prometheus) get(handler string) (string, bool) {
 }
 
 func (p *Prometheus) register() {
+	p.upTime = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: p.Namespace,
+			Subsystem: p.Subsystem,
+			Name:      "uptime",
+			Help:      "HTTP service uptime.",
+		}, nil,
+	)
+	prometheus.MustRegister(p.upTime)
+
 	p.reqCnt = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: p.Namespace,
@@ -288,6 +308,7 @@ func (p *Prometheus) Instrument() gin.HandlerFunc {
 		elapsed := float64(time.Since(start)) / float64(time.Second)
 		resSz := float64(c.Writer.Size())
 
+		p.upTime.WithLabelValues().Inc()
 		p.reqCnt.WithLabelValues(status, c.Request.Method, c.HandlerName(), c.Request.Host, path).Inc()
 		p.reqDur.WithLabelValues(c.Request.Method, path).Observe(elapsed)
 		p.reqSz.Observe(float64(reqSz))
